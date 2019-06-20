@@ -1,36 +1,17 @@
-from flask import Flask, request, render_template, url_for, flash, redirect
-from flask_login import login_required, login_user, logout_user, LoginManager, UserMixin
-from forms import LoginForm
-from flask_sqlalchemy import SQLAlchemy
-from models import User
-from ext import db, login_manager
-from hashlib import md5
+from flask import request, render_template, url_for, flash, redirect
+from flask_login import login_required, login_user, logout_user
+from ThriftShop.forms import LoginForm
+from flask_login import current_user
 import re
-import sys
-import os
 
-app = Flask(__name__)
-app.secret_key = 'th1s_1s_My_s3creT'
-
-WIN = sys.platform.startswith('win')
-if WIN:
-    prefix = 'sqlite:///'
-else:
-    prefix = 'sqlite:////'
-app.config['SQLALCHEMY_DATABASE_URI'] = prefix + os.path.join(app.root_path, 'database/users.db')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
-
-login_manager = LoginManager(app)
-login_manager.login_view = 'login'
-
-
-
+from ThriftShop import app, db
+from ThriftShop.models import User
 
 
 @app.route('/')
 def index():
-    # TODO
+    if current_user.is_authenticated:
+        return 'hahaha,secret'
     return render_template('index.html')
 
 
@@ -46,7 +27,8 @@ def register():
             flash('%s Please retry.' % info, 'danger')
             return '', 204
 
-        new_user = User(username=username, password=password, email=email)
+        new_user = User(username=username, email=email)
+        new_user.set_password(password)
         db.session.add(new_user)
         try:
             db.session.commit()
@@ -64,13 +46,19 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        user = User.query.filter_by(username=username, password=password).first()
-        if user is not None:
+        if not username or not password:
+            flash('Invalid input.')
+            return '', 204
+
+        user = User.query.filter_by(username=username).first()
+        if user is not None and user.validate_password(password):
             login_user(user)
             flash('Welcome back!', 'success')
             return redirect(url_for('index'))
         else:
             flash('Invalid username or password. Please retry.', 'danger')
+            return '', 204
+
     form = LoginForm()
     return render_template('login.html', form=form)
 
@@ -83,11 +71,13 @@ def logout():
     return redirect(url_for('index'))
 
 
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.filter_by(id=int(user_id)).first()
+@app.route('/home')
+@login_required
+def home():
+    return 'My Home!'
 
 
+# 功能函数
 def __check_register_info(username, password, email):
     if len(username) <= 6 or len(username) > 20:
         return False, 'Username should be longer than 6 letters and shorter than 20 letters.'
@@ -99,13 +89,9 @@ def __check_register_info(username, password, email):
         return False, 'Password should contain both digit and letters.'
     user = User.query.filter_by(username=username).first()
     if user is not None:
-        return False, 'Username already existed. Please try again.'
+        return False, 'Username already existed.'
     user = User.query.filter_by(email=email).first()
     if user is not None:
-        return False, 'E-mail already existed. Please try again.'
+        return False, 'E-mail already existed.'
 
     return True, None
-
-
-if __name__ == '__main__':
-    app.run(debug=True)
