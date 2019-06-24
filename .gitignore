@@ -128,3 +128,4 @@ dmypy.json
 *.db
 
 .idea
+ThriftShop/uploads

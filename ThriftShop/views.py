@@ -1,80 +1,242 @@
-from flask import request, render_template, url_for, flash, redirect
-from flask_login import login_required, login_user, logout_user
+from flask import request, render_template, url_for, flash, redirect, jsonify, g
+from flask_httpauth import HTTPBasicAuth
 from ThriftShop.forms import LoginForm
 from flask_login import current_user
 import re
+import os
+from werkzeug.utils import secure_filename
+from sqlalchemy import desc
+import time
 
 from ThriftShop import app, db
-from ThriftShop.models import User
+from ThriftShop.models import User, BookInfo
+
+auth = HTTPBasicAuth()
 
 
 @app.route('/')
 def index():
     if current_user.is_authenticated:
-        return 'hahaha,secret'
+        return render_template('index.html')
     return render_template('index.html')
 
 
-@app.route('/register', methods=['POST', 'GET'])
+@app.route('/register', methods=['POST'])
 def register():
-    if request.method == 'POST':
-        # TODO: check if information is valid
-        username = request.form['username']
-        password = request.form['password']
-        email = request.form['email']
-        valid, info = __check_register_info(username, password, email)
-        if not valid:
-            flash('%s Please retry.' % info, 'danger')
-            return '', 204
+    print(request.form)
+    username = request.form.get('username', default=None)
+    password = request.form.get('password', default=None)
+    email = request.form.get('email', default=None)
+    residence = ', '.join([request.form.get('residence[%d]' % i, default='') for i in range(3)])
+    print(residence)
+    phone_number = request.form.get('phone', default=None)
 
-        new_user = User(username=username, email=email)
-        new_user.set_password(password)
-        db.session.add(new_user)
-        try:
-            db.session.commit()
-            flash('Success! Redirecting to login page...', 'success')
-            return redirect(url_for('login'))
-        except:
-            flash('Email or username already used. Please retry.', 'danger')
-    else:
-        return render_template('register.html')
+    if any(x is None for x in (username, password, email, residence, phone_number)):
+        return jsonify({'status': 0, 'msg': 'Please input all information required.'})
+
+    valid, info = __check_register_info(username, password, email)
+    if not valid:
+        return jsonify({'status': 0, 'msg': info})
+
+    new_user = User(username=username, email=email, residence=residence, phone_number=phone_number)
+    new_user.set_password(password)
+    db.session.add(new_user)
+    db.session.commit()
+
+    return jsonify({'status': 1, 'msg': info})
 
 
-@app.route('/login', methods=['POST', 'GET'])
+@app.route('/login', methods=['POST'])
 def login():
     # TODO 也可以用邮箱登录
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        if not username or not password:
-            flash('Invalid input.')
-            return '', 204
+    username = request.form['username']
+    password = request.form['password']
+    if not username or not password:
+        return jsonify({'status': 0, 'msg': 'Invalid input.', 'token': None})
 
-        user = User.query.filter_by(username=username).first()
-        if user is not None and user.validate_password(password):
-            login_user(user)
-            flash('Welcome back!', 'success')
-            return redirect(url_for('index'))
-        else:
-            flash('Invalid username or password. Please retry.', 'danger')
-            return '', 204
+    user = User.query.filter_by(username=username).first()
+    if user is not None and user.verify_password(password):
+        return jsonify({'status': 1, 'msg': 'Welcome back!', 'token': user.generate_token()})
+    else:
+        return jsonify({'status': 0, 'msg': 'Invalid username or password.', 'token': None})
 
-    form = LoginForm()
-    return render_template('login.html', form=form)
+
+@app.route('/upload', methods=['POST'])
+# @auth.login_required
+def upload():
+    pic_file = request.files.get('file', default=None)
+    if pic_file and allowed_file(pic_file.filename):
+        folder = app.config['UPLOAD_PIC_PATH']
+        if not os.path.isdir(folder):
+            os.mkdir(folder)
+        time_stamp = hex(int(time.time()))[-6:]
+        pic_path = os.path.join(app.config['UPLOAD_PIC_PATH'], time_stamp + '_' + secure_filename(pic_file.filename))
+        pic_file.save(pic_path)
+        return jsonify({'status': 1, 'filename': pic_path})
+    else:
+        print(request.files)
+        return jsonify({'status': 0, 'filename': None})
 
 
 @app.route('/logout')
-@login_required
+@auth.login_required
 def logout():
-    logout_user()
-    flash('You have already logout.', 'success')
-    return redirect(url_for('index'))
+    return jsonify({'status': 1, 'msg': 'You have already logout. Goodbye~'})
 
 
-@app.route('/home')
-@login_required
-def home():
-    return 'My Home!'
+@app.route('/user/<int:idx>')
+@auth.login_required
+def user_info(idx):
+    # TODO
+    user_dict = current_user.as_dict()
+    del user_dict['password'], user_dict['id']
+
+    return jsonify(user_dict)
+
+
+@app.route('/post', methods=['POST'])
+# @auth.login_required
+def post():
+    # TODO 处理空请求
+    book_name = request.form.get('book_name', default='[No Name]')
+    original_price = request.form.get('original_price', default=None, type=float)
+    sale_price = request.form.get('sale_price', default=None, type=float)
+    category = request.form.get('category', default=None)
+    info = request.form.get('info', default=None)
+    isbn = request.form.get('isbn', default=None)
+    pic_file = request.files.get('pic_path', default=None)
+    # TODO: from token to userid
+    seller_id = 1
+
+    if pic_file is not None:
+        pic_path = os.path.join(app.config['UPLOAD_PIC_PATH'], secure_filename(pic_file.filename))
+        pic_file.save(pic_path)
+    else:
+        pic_path = ''
+        # TODO
+    new_book = BookInfo(book_name, original_price, sale_price, category, info, isbn, pic_path, seller_id)
+    db.session.add(new_book)
+    db.session.commit()
+
+    return jsonify({'status': 1, 'msg': 'Success'})
+
+
+@app.route('/buy')
+@auth.login_required
+def buy():
+    book_id = request.args.get('book_id')
+    target_book = BookInfo.query.filter_by(id=book_id).first()
+    if target_book is None:
+        return '', 502
+    return jsonify(target_book.as_dict())
+
+
+@app.route('/detail/<int:book_id>')
+def book_info(book_id):
+    target_book = BookInfo.query.filter_by(id=book_id).as_dict()
+
+    return jsonify(target_book)
+
+
+@app.route('/want', methods=['POST', 'GET'])
+@auth.login_required
+def want():
+    if request.method == 'POST':
+        # TODO 处理空请求
+        book_name = request.form.get('book_name', default='[No Name]')
+        original_price = request.form.get('original_price', default=None, type=float)
+        sale_price = request.form.get('sale_price', default=None, type=float)
+        category = request.form.get('category', default=None)
+        info = request.form.get('info', default=None)
+        isbn = request.form.get('isbn', default=None)
+        pic_file = request.files.get('picture', default=None)
+        seller_id = current_user.id
+
+        if pic_file is not None:
+            pic_path = os.path.join(app.config['UPLOAD_PIC_PATH'], secure_filename(pic_file.filename))
+            pic_file.save(pic_path)
+        else:
+            pic_path = ''
+            # TODO
+        new_book = BookInfo(book_name, original_price, sale_price, category, info, isbn, pic_path, seller_id)
+        db.session.add(new_book)
+        db.session.commit()
+        # 折扣
+        discount = sale_price / original_price
+        if discount >= 1:
+            flash('Set a discount to help you sale better.', 'warning')
+        return redirect(url_for('arena'))
+    else:
+        return render_template('want.html')
+
+
+@app.route('/arena')
+def arena():
+    # 排序
+    page_no = request.args.get('page', default=0)
+    item_per_page = request.args.get('items', default=10)
+    order = request.args.get('order', default='asc')
+    key = request.args.get('key', default='discount')
+    # 筛选
+    category = request.args.get('category', default=None)
+    haspic = request.args.get('haspic', default=0)
+
+    all_books = BookInfo.query
+    if category is not None:
+        all_books = all_books.filter_by(category=category)
+    if haspic == 1:
+        # TODO: allow no pic
+        pass
+
+    key_dict = {
+        'price': BookInfo.sale_price,
+        'name': BookInfo.book_name,
+        'discount': BookInfo.discount
+    }
+    if key in key_dict:
+        if order == 'asc':
+            all_books = all_books.order_by(key_dict[key])
+        elif order == 'desc':
+            all_books = all_books.order_by(desc(key_dict[key]))
+        else:
+            raise Exception()
+
+    all_books = all_books.limit(item_per_page).offset(item_per_page * page_no)
+
+    return jsonify([x.as_dict() for x in all_books.all()])
+
+
+@app.route('/message')
+@auth.login_required
+def message_home():
+    return redirect(url_for('message/box'))
+
+
+@app.route('/message/box')
+@auth.login_required
+def message_box():
+    # TODO
+    return '', 404
+
+
+@app.route('/message/send', methods=['POST', 'GET'])
+@auth.login_required
+def message_send():
+    if request.method == 'POST':
+        receiver_name = request.form.get('receiver', default=None)
+        message = request.form.get('message', default=None)
+        if not message or not receiver_name:
+            flash('message or receiver is not filled.', 'warning')
+            return '', 204
+
+        receiver = User.query.filter_by(username=receiver_name).first()
+        if not receiver:
+            flash('Receiver doesn\'t exist.', 'warning')
+            return '', 204
+
+        # TODO
+    else:
+        return render_template('messages/send.html')
 
 
 # 功能函数
@@ -95,3 +257,27 @@ def __check_register_info(username, password, email):
         return False, 'E-mail already existed.'
 
     return True, None
+
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1] in app.config['ALLOWED_EXTENSIONS']
+
+
+@app.route('/token')
+@auth.login_required
+def get_auth_token():
+    token = g.user.generate_token()
+    return jsonify({'token': token.decode('ascii')})
+
+
+@auth.verify_password
+def verify_password(username_or_token, password):
+    # first try to authenticate by token
+    user = User.verify_auth_token(username_or_token)
+    if not user:
+        # try to authenticate with username/password
+        user = User.query.filter_by(username=username_or_token).first()
+        if not user or not user.verify_password(password):
+            return False
+    g.user = user
+    return True
