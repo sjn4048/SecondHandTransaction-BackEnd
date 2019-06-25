@@ -1,5 +1,5 @@
 from flask import request, render_template, url_for, flash, redirect, jsonify, g
-from flask_httpauth import HTTPBasicAuth
+from flask_httpauth import HTTPBasicAuth, HTTPTokenAuth
 from ThriftShop.forms import LoginForm
 from flask_login import current_user
 import re
@@ -11,14 +11,7 @@ import time
 from ThriftShop import app, db
 from ThriftShop.models import User, BookInfo
 
-auth = HTTPBasicAuth()
-
-
-@app.route('/')
-def index():
-    if current_user.is_authenticated:
-        return render_template('index.html')
-    return render_template('index.html')
+auth = HTTPTokenAuth(scheme='token')
 
 
 @app.route('/register', methods=['POST'])
@@ -27,7 +20,7 @@ def register():
     username = request.form.get('username', default=None)
     password = request.form.get('password', default=None)
     email = request.form.get('email', default=None)
-    residence = ', '.join([request.form.get('residence[%d]' % i, default='') for i in range(3)])
+    residence = request.form.get('residence[2]', default='')
     print(residence)
     phone_number = request.form.get('phone', default=None)
 
@@ -56,13 +49,12 @@ def login():
 
     user = User.query.filter_by(username=username).first()
     if user is not None and user.verify_password(password):
-        return jsonify({'status': 1, 'msg': 'Welcome back!', 'token': user.generate_token()})
+        return jsonify({'status': 1, 'msg': 'Welcome back!', 'token': user.generate_token().decode('ascii')})
     else:
         return jsonify({'status': 0, 'msg': 'Invalid username or password.', 'token': None})
 
 
 @app.route('/upload', methods=['POST'])
-# @auth.login_required
 def upload():
     pic_file = request.files.get('file', default=None)
     if pic_file and allowed_file(pic_file.filename):
@@ -72,7 +64,8 @@ def upload():
         time_stamp = hex(int(time.time()))[-6:]
         pic_path = os.path.join(app.config['UPLOAD_PIC_PATH'], time_stamp + '_' + secure_filename(pic_file.filename))
         pic_file.save(pic_path)
-        return jsonify({'status': 1, 'filename': pic_path})
+        # TODO
+        return jsonify({'status': 1, 'filename': pic_path[pic_path.index('/static'):]})
     else:
         print(request.files)
         return jsonify({'status': 0, 'filename': None})
@@ -95,7 +88,7 @@ def user_info(idx):
 
 
 @app.route('/post', methods=['POST'])
-# @auth.login_required
+@auth.login_required
 def post():
     # TODO 处理空请求
     book_name = request.form.get('book_name', default='[No Name]')
@@ -104,38 +97,36 @@ def post():
     category = request.form.get('category', default=None)
     info = request.form.get('info', default=None)
     isbn = request.form.get('isbn', default=None)
-    pic_file = request.files.get('pic_path', default=None)
+    pic_file = request.form.get('pic_path', default=None)
     # TODO: from token to userid
     seller_id = 1
 
-    if pic_file is not None:
-        pic_path = os.path.join(app.config['UPLOAD_PIC_PATH'], secure_filename(pic_file.filename))
-        pic_file.save(pic_path)
-    else:
-        pic_path = ''
-        # TODO
-    new_book = BookInfo(book_name, original_price, sale_price, category, info, isbn, pic_path, seller_id)
+    new_book = BookInfo(book_name, original_price, sale_price, category, info, isbn, pic_file, seller_id)
+    print(new_book)
     db.session.add(new_book)
     db.session.commit()
 
     return jsonify({'status': 1, 'msg': 'Success'})
 
 
-@app.route('/buy')
+@app.route('/buy', methods=['POST'])
 @auth.login_required
 def buy():
-    book_id = request.args.get('book_id')
+    book_id = request.form.get('book_id')
     target_book = BookInfo.query.filter_by(id=book_id).first()
     if target_book is None:
-        return '', 502
-    return jsonify(target_book.as_dict())
+        return jsonify({'status': 0, 'msg': 'Book does not exist'})
+    # TODO logic
+    return jsonify({'status': 1, 'msg': 'Success'})
 
 
 @app.route('/detail/<int:book_id>')
 def book_info(book_id):
-    target_book = BookInfo.query.filter_by(id=book_id).as_dict()
-
-    return jsonify(target_book)
+    target_book = BookInfo.query.filter_by(id=book_id).first()
+    if target_book:
+        return jsonify({'status': 1, 'data': target_book.as_dict()})
+    else:
+        return jsonify({'status': 0, 'data': None})
 
 
 @app.route('/want', methods=['POST', 'GET'])
@@ -212,31 +203,26 @@ def message_home():
     return redirect(url_for('message/box'))
 
 
-@app.route('/message/box')
+@app.route('/box')
 @auth.login_required
 def message_box():
     # TODO
     return '', 404
 
 
-@app.route('/message/send', methods=['POST', 'GET'])
+@app.route('/send', methods=['POST', 'GET'])
 @auth.login_required
 def message_send():
-    if request.method == 'POST':
-        receiver_name = request.form.get('receiver', default=None)
-        message = request.form.get('message', default=None)
-        if not message or not receiver_name:
-            flash('message or receiver is not filled.', 'warning')
-            return '', 204
+    receiver_name = request.form.get('receiver', default=None)
+    message = request.form.get('message', default=None)
+    if not message or not receiver_name:
+        flash('message or receiver is not filled.', 'warning')
+        return '', 204
 
-        receiver = User.query.filter_by(username=receiver_name).first()
-        if not receiver:
-            flash('Receiver doesn\'t exist.', 'warning')
-            return '', 204
-
-        # TODO
-    else:
-        return render_template('messages/send.html')
+    receiver = User.query.filter_by(username=receiver_name).first()
+    if not receiver:
+        flash('Receiver doesn\'t exist.', 'warning')
+        return '', 204
 
 
 # 功能函数
@@ -270,14 +256,18 @@ def get_auth_token():
     return jsonify({'token': token.decode('ascii')})
 
 
-@auth.verify_password
-def verify_password(username_or_token, password):
+@app.route('/home')
+@auth.login_required
+def home():
+    return jsonify(g.user.home_as_dict())
+
+
+@auth.verify_token
+def verify_token(token):
+    g.user = None
     # first try to authenticate by token
-    user = User.verify_auth_token(username_or_token)
+    user = User.verify_auth_token(token)
     if not user:
-        # try to authenticate with username/password
-        user = User.query.filter_by(username=username_or_token).first()
-        if not user or not user.verify_password(password):
-            return False
+        return False
     g.user = user
     return True

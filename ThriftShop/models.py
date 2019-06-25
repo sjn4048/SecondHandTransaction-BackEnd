@@ -19,6 +19,7 @@ class User(UserMixin, db.Model):
     #bought_books = relationship('BookInfo')
     # Other info
     use_delivery = db.Column(db.Boolean)    # use express delivery or not
+    face2face = db.Column(db.Boolean)       # use face2face delivery or not
 
     def __init__(self, username, email, residence, phone_number):
         self.username = username
@@ -37,6 +38,10 @@ class User(UserMixin, db.Model):
 
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+    def home_as_dict(self):
+        columns = ['id', 'username', 'email', 'residence', 'phone_number', 'use_delivery']
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns if c.name in columns}
 
     def generate_token(self, expiration=60*60*24*10):
         # 默认token时长：10天
@@ -90,6 +95,6 @@ class BookInfo(db.Model):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
     def __repr__(self):
-        return jsonify(self.as_dict())
+        return str(self.as_dict())
 
 

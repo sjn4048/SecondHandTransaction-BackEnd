@@ -1,7 +1,7 @@
 import sys
 import os
 
-UPLOAD_PIC_PATH = './uploads/'
+UPLOAD_PIC_PATH = './ThriftShop/static/uploads/'
 DEBUG = True
 
 WIN = sys.platform.startswith('win')
