@@ -7,21 +7,20 @@ import os
 from werkzeug.utils import secure_filename
 from sqlalchemy import desc
 import time
+from datetime import datetime
 
 from ThriftShop import app, db
-from ThriftShop.models import User, BookInfo
+from ThriftShop.models import User, BookInfo, Message, WantBuy, Order
 
 auth = HTTPTokenAuth(scheme='token')
 
 
 @app.route('/register', methods=['POST'])
 def register():
-    print(request.form)
     username = request.form.get('username', default=None)
     password = request.form.get('password', default=None)
     email = request.form.get('email', default=None)
     residence = request.form.get('residence[2]', default='')
-    print(residence)
     phone_number = request.form.get('phone', default=None)
 
     if any(x is None for x in (username, password, email, residence, phone_number)):
@@ -114,10 +113,16 @@ def post():
 def buy():
     book_id = request.form.get('book_id')
     target_book = BookInfo.query.filter_by(id=book_id).first()
-    if target_book is None:
-        return jsonify({'status': 0, 'msg': 'Book does not exist'})
-    # TODO logic
-    return jsonify({'status': 1, 'msg': 'Success'})
+    if target_book:
+        timestamp = get_timestamp()
+        buyer_id = g.user.id
+        new_order = Order(book_id, buyer_id, timestamp)
+        print(new_order)
+        db.session.add(new_order)
+        db.session.commit()
+        return jsonify({'status': 1, 'msg': 'Success'})
+
+    return jsonify({'status': 0, 'msg': 'Book does not exist or other error met.'})
 
 
 @app.route('/detail/<int:book_id>')
@@ -129,39 +134,47 @@ def book_info(book_id):
         return jsonify({'status': 0, 'data': None})
 
 
-@app.route('/want', methods=['POST', 'GET'])
+@app.route('/home/change', methods=['POST'])
+@auth.login_required
+def change_user_info():
+    print(request.form)
+    username = request.form.get('username', default=None)
+    new_password = request.form.get('new_password', default=None)
+    email = request.form.get('email', default=None)
+    residence = request.form.get('residence[2]', default='')
+    delivery = bool(request.form.get('delivery', default=None))
+    face2face = bool(request.form.get('face2face', default=None))
+    phone = request.form.get('phone', default=None)
+
+    if g.user.username == username:
+        g.user.update(new_password, email, residence, delivery, face2face, phone)
+        db.session.add(g.user)
+        db.session.commit()
+        return jsonify({'status': 1, 'msg': 'Success. You may have to re-login'})
+    else:
+        return jsonify({'status': 0, 'msg': 'It is not your account!'})
+
+
+@app.route('/want', methods=['POST'])
 @auth.login_required
 def want():
-    if request.method == 'POST':
-        # TODO 处理空请求
-        book_name = request.form.get('book_name', default='[No Name]')
-        original_price = request.form.get('original_price', default=None, type=float)
-        sale_price = request.form.get('sale_price', default=None, type=float)
-        category = request.form.get('category', default=None)
-        info = request.form.get('info', default=None)
-        isbn = request.form.get('isbn', default=None)
-        pic_file = request.files.get('picture', default=None)
-        seller_id = current_user.id
+    # TODO 处理空请求
+    book_name = request.form.get('book_name', default='None')
+    isbn = request.form.get('isbn', default=None)
+    expect_price = request.files.get('expect_price', default=None)
+    user_id = g.user.id
 
-        if pic_file is not None:
-            pic_path = os.path.join(app.config['UPLOAD_PIC_PATH'], secure_filename(pic_file.filename))
-            pic_file.save(pic_path)
-        else:
-            pic_path = ''
-            # TODO
-        new_book = BookInfo(book_name, original_price, sale_price, category, info, isbn, pic_path, seller_id)
-        db.session.add(new_book)
+    if None in (book_name, isbn, expect_price, user_id):
+        new_wantbuy = WantBuy(book_name, expect_price, isbn, user_id)
+        db.session.add(new_wantbuy)
         db.session.commit()
-        # 折扣
-        discount = sale_price / original_price
-        if discount >= 1:
-            flash('Set a discount to help you sale better.', 'warning')
-        return redirect(url_for('arena'))
-    else:
-        return render_template('want.html')
+        return jsonify({'status': 1, 'msg': 'Success. '})
+
+    return jsonify({'status': 0, 'msg': 'Information incorrect or not full.'})
 
 
 @app.route('/arena')
+@auth.login_required
 def arena():
     # 排序
     page_no = request.args.get('page', default=0)
@@ -197,32 +210,32 @@ def arena():
     return jsonify([x.as_dict() for x in all_books.all()])
 
 
-@app.route('/message')
-@auth.login_required
-def message_home():
-    return redirect(url_for('message/box'))
-
-
 @app.route('/box')
 @auth.login_required
 def message_box():
-    # TODO
-    return '', 404
+    user_id = g.user.id
+    messages = Message.query.filter_by(receiver_id=user_id).all()
+    return jsonify([x.as_ret_dict() for x in messages])
 
 
 @app.route('/send', methods=['POST', 'GET'])
 @auth.login_required
 def message_send():
     receiver_name = request.form.get('receiver', default=None)
-    message = request.form.get('message', default=None)
-    if not message or not receiver_name:
-        flash('message or receiver is not filled.', 'warning')
-        return '', 204
+    sender_id = g.user.id
+    content = request.form.get('content', default=None)
+    if not content or not receiver_name:
+        return jsonify({'status': 0, 'msg': 'Missing information.'})
 
     receiver = User.query.filter_by(username=receiver_name).first()
     if not receiver:
-        flash('Receiver doesn\'t exist.', 'warning')
-        return '', 204
+        return jsonify({'status': 0, 'msg': 'User does not exist.'})
+    receiver_id = receiver.id
+    timestamp = get_timestamp()
+    new_message = Message(receiver_id, sender_id, content, timestamp)
+    db.session.add(new_message)
+    db.session.commit()
+    return jsonify({'status': 1, 'msg': 'Success'})
 
 
 # 功能函数
@@ -247,6 +260,10 @@ def __check_register_info(username, password, email):
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1] in app.config['ALLOWED_EXTENSIONS']
+
+
+def get_timestamp():
+    return int(datetime.timestamp(datetime.now()))
 
 
 @app.route('/token')

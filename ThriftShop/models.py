@@ -16,9 +16,9 @@ class User(UserMixin, db.Model):
     phone_number = db.Column(db.String(30))
     # Books
     posted_books = relationship('BookInfo')
-    #bought_books = relationship('BookInfo')
+    # bought_books = relationship('BookInfo')
     # Other info
-    use_delivery = db.Column(db.Boolean)    # use express delivery or not
+    delivery = db.Column(db.Boolean)    # use express delivery or not
     face2face = db.Column(db.Boolean)       # use face2face delivery or not
 
     def __init__(self, username, email, residence, phone_number):
@@ -26,6 +26,20 @@ class User(UserMixin, db.Model):
         self.email = email
         self.residence = residence
         self.phone_number = phone_number
+
+    def update(self, new_password, email, residence, delivery, face2face, phone):
+        if new_password:
+            self.set_password(new_password)
+        if email:
+            self.email = email
+        if residence:
+            self.residence = residence
+        if delivery:
+            self.delivery = delivery
+        if face2face:
+            self.face2face = face2face
+        if phone:
+            self.phone_number = phone
 
     def __repr__(self):
         return '<User %r>' % self.username
@@ -98,3 +112,69 @@ class BookInfo(db.Model):
         return str(self.as_dict())
 
 
+class WantBuy(db.Model):
+    __tablename__ = 'wantlist'
+    # book info
+    id = db.Column(db.Integer, primary_key=True)
+    book_name = db.Column(db.String(80))
+    expect_price = db.Column(db.Float)
+    isbn = db.Column(db.String(30))
+    user_id = db.Column(db.Integer)
+
+    def __init__(self, book_name, expect_price, isbn, user_id):
+        self.book_name = book_name
+        self.expect_price = expect_price
+        self.isbn = isbn
+        self.user_id = user_id
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+    def __repr__(self):
+        return str(self.as_dict())
+
+
+class Order(db.Model):
+    __tablename__ = 'orders'
+    # book info
+    id = db.Column(db.Integer, primary_key=True)
+    book_id = db.Column(db.Integer)
+    buyer_id = db.Column(db.Integer)
+    timestamp = db.Column(db.BigInteger)
+
+    def __init__(self, book_id, buyer_id, timestamp):
+        self.book_id = book_id
+        self.buyer_id = buyer_id
+        self.timestamp = timestamp
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+    def __repr__(self):
+        return str(self.as_dict())
+
+class Message(db.Model):
+    __tablename__ = 'messages'
+    # book info
+    id = db.Column(db.Integer, primary_key=True)
+    receiver_id = db.Column(db.Integer)
+    sender_id = db.Column(db.Integer)
+    content = db.Column(db.Text)
+    timestamp = db.Column(db.BigInteger)
+
+    def __init__(self, receiver_id, sender_id, content, timestamp):
+        self.receiver_id = receiver_id
+        self.sender_id = sender_id
+        self.content = content
+        self.timestamp = timestamp
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+    def as_ret_dict(self):
+        d = self.as_dict()
+        d['sender_name'] = User.query.filter_by(id=self.sender_id).first().username
+        return d
+
+    def __repr__(self):
+        return str(self.as_dict())
