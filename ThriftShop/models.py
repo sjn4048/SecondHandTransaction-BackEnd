@@ -1,8 +1,6 @@
 from flask_login import UserMixin
-from flask import jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from ThriftShop import db
-from sqlalchemy.orm import relationship
 from itsdangerous import TimedJSONWebSignatureSerializer as Serializer, SignatureExpired, BadSignature
 
 
@@ -14,10 +12,6 @@ class User(UserMixin, db.Model):
     password = db.Column(db.String(128))    # hashed
     residence = db.Column(db.String(255))
     phone_number = db.Column(db.String(30))
-    # Books
-    posted_books = relationship('BookInfo')
-    # bought_books = relationship('BookInfo')
-    # Other info
     delivery = db.Column(db.Boolean)    # use express delivery or not
     face2face = db.Column(db.Boolean)       # use face2face delivery or not
 
@@ -90,11 +84,12 @@ class BookInfo(db.Model):
     isbn = db.Column(db.String(30))
     picture = db.Column(db.String(100))    # file path
     # user info
-    seller_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    # buyer_id = db.Column(db.Integer)
+    seller_id = db.Column(db.Integer)
+    buyer_id = db.Column(db.Integer)
+    bought = db.Column(db.Boolean)
 
     def __init__(self, book_name, original_price, sale_price, category,
-                 info, isbn, picture, seller_id):
+                 info, isbn, picture, seller_id, buyer_id=None, bought=False):
         self.book_name = book_name
         self.original_price = original_price
         self.sale_price = sale_price
@@ -104,9 +99,21 @@ class BookInfo(db.Model):
         self.isbn = isbn
         self.picture = picture
         self.seller_id = seller_id
+        self.buyer_id = buyer_id
+        self.bought = bought
+
+    def set_bought(self, buyer_id):
+        self.bought = True
+        self.buyer_id = buyer_id
 
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+    def as_ret_dict(self, base_root):
+        d = {c.name: getattr(self, c.name) for c in self.__table__.columns}
+        d['picture'] = base_root + '/' + d['picture']
+        d['seller_id'] = User.query.filter_by(id=d['seller_id']).first().username
+        return d
 
     def __repr__(self):
         return str(self.as_dict())
@@ -129,6 +136,10 @@ class WantBuy(db.Model):
 
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+    def as_ret_dict(self):
+        return self.as_dict()
+
 
     def __repr__(self):
         return str(self.as_dict())
@@ -153,6 +164,7 @@ class Order(db.Model):
     def __repr__(self):
         return str(self.as_dict())
 
+
 class Message(db.Model):
     __tablename__ = 'messages'
     # book info
@@ -161,12 +173,14 @@ class Message(db.Model):
     sender_id = db.Column(db.Integer)
     content = db.Column(db.Text)
     timestamp = db.Column(db.BigInteger)
+    has_read = db.Column(db.Boolean)
 
-    def __init__(self, receiver_id, sender_id, content, timestamp):
+    def __init__(self, receiver_id, sender_id, content, timestamp, has_read=False):
         self.receiver_id = receiver_id
         self.sender_id = sender_id
         self.content = content
         self.timestamp = timestamp
+        self.has_read = has_read
 
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
@@ -175,6 +189,9 @@ class Message(db.Model):
         d = self.as_dict()
         d['sender_name'] = User.query.filter_by(id=self.sender_id).first().username
         return d
+
+    def read(self):
+        self.has_read = True
 
     def __repr__(self):
         return str(self.as_dict())
